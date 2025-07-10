@@ -206,7 +206,7 @@ classdef arrShow < handle
             viewMode = 'default'; % could be quiver (vector plot) as well
             voxelAspectRatio = [];
             if nargin > 1
-                if length(varargin) ==1
+                if isscalar(varargin)
                     obj.title = varargin{1};
                     if strcmp(obj.title,inputname(1))
                         obj.workspaceArrayName = inputname(1);
@@ -313,7 +313,10 @@ classdef arrShow < handle
                 'Visible','off',...
                 'Tag','arrShowFig',...
                 'IntegerHandle','on');
-            
+
+            if ~verLessThan('matlab', '25.1')
+                obj.fh.Theme = 'light';
+            end
             set(obj.fh,'UserData',obj)  % link this object to main figure
             
             % set title
@@ -359,7 +362,7 @@ classdef arrShow < handle
             obj.fph   = uipanel(obj.fh,'Units','centimeters',...
                 'Position',[0, bphe,  fpos(3), fphe],...
                 'Interruptible','off',...
-                'BorderType','beveledin',...
+                'BorderType','line',...
                 'BusyAction','cancel',...                
                 'Tag','asFigurePanel');
             set(obj.fph,'Units','normalized');            

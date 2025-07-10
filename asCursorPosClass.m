@@ -535,7 +535,7 @@ classdef asCursorPosClass < handle
                 if createPanel(i)
                     if obj.sph(i) == 0
                         obj.sph(i) = uipanel(obj.ph,'Units','centimeters',...
-                            'Position',[l, 0, ps, phi],'BorderType','beveledout');
+                            'Position',[l, 0, ps, phi],'BorderType','line');
                     else
                         set(obj.sph(i),'position',[l, 0, ps, phi]);
                     end

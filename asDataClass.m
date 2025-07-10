@@ -685,7 +685,7 @@ classdef asDataClass < handle
             end
             
             if ~isnumeric(dataArray) && ~isaCustomMemmap
-                warning('asDataClass:validateImageArray','Input dataArrayay seems not to be numeric. Trying to convert it into double...');
+                warning('asDataClass:validateImageArray','Input dataArray seems not to be numeric. Trying to convert it into double...');
                 try
                     dataArray = double(dataArray);
                 catch ME

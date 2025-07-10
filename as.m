@@ -111,7 +111,7 @@ end
 
 
 % auto title
-if nargin > 1 && length(varargin) == 1
+if nargin > 1 && isscalar(varargin)
     % if only one additional argument is given, assume this to be the
     % desired figure title.
     % (This is an exception in the standard varargin syntax, but it's convenient)
