@@ -365,6 +365,9 @@ classdef asSelectionClass < handle
         
         function setCurrentVcValue(obj, value)
             if obj.enabled
+                if isnumeric(value) && isscalar(value)
+                    value = num2str(value);
+                end
                 obj.vcos{obj.selVcoNr}.setStr(value);
                 obj.updFig();
             end

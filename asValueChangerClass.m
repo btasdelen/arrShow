@@ -546,6 +546,9 @@ classdef asValueChangerClass < handle
         
         function setStr(obj, str, runCallback)
             if obj.enabled
+                if isnumeric(str) && isscalar(str)
+                    str = num2str(str);
+                end
                 vStr = obj.validateStr(str);
                 if obj.getColonDimTag && ~strcmp(vStr,obj.colonStr)
                     obj.setColonDimTag(0,true);
@@ -643,6 +646,9 @@ classdef asValueChangerClass < handle
         
         function setStrForce(obj, str)
             % sets string without validity check
+            if isnumeric(str) && isscalar(str)
+                str = num2str(str);
+            end
             obj.str = str;
             set(obj.eth,'String',obj.str);
             if obj.offset
