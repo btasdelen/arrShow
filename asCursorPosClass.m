@@ -210,9 +210,15 @@ classdef asCursorPosClass < handle
             
             % get current axes handle
             ah = obj.getCurrentAxesHandleCb();
+            if isempty(ah) || ~ishandle(ah)
+                return;
+            end
             
             % get complex image from the axes handle's UserData field
             ud = get(ah,'UserData');
+            if isempty(ud) || ~isstruct(ud) || ~isfield(ud,'cplxImg') || isempty(ud.cplxImg)
+                return;
+            end
             img = ud.cplxImg;
             
             % limit cursor position to image matrix dimensions
@@ -266,8 +272,17 @@ classdef asCursorPosClass < handle
                         % ...we also need to copy the context menu because of
                         % this HitTest problem :-((                        
                     end
-                    set(ah,'UserData',ud);                    
+                    if ishandle(ah)
+                        set(ah,'UserData',ud);
+                    end
                 else
+                    if ~ishandle(ud.rect)
+                        ud.rect = [];
+                        if ishandle(ah)
+                            set(ah,'UserData',ud);
+                        end
+                        return;
+                    end
                     set(ud.rect,'Position',[posX-.5, posY-.5, 1,1]);
                 end
                 

@@ -128,12 +128,7 @@ classdef arrShow < handle
         
         
         playAlongDim  = false;  % this is set to true if the play button has been pressed
-        framerate = 50;         % Standard framerate for the play function.
-        % Note: the framerate setting
-        % currently does not consider
-        % the execution time of updFig and is thus not precise.
-        % The actual framerate can be assumed to
-        % be lower.
+        framerate = 20;         % Standard framerate for the play function.
         
         
         stdColormap     = 'Gray(256)';         % standard colormap
@@ -160,6 +155,7 @@ classdef arrShow < handle
         CP_HEIGHT = 2.2;      % fixed height for the controlPanel (in centimeters)
         BP_HEIGHT = .5;       % fixed height for the bottom panel (in centimeters)
         FP_MAX_HEIGHT = 18;   % desired height for the figurePanel (in centimeters)
+        FP_MIN_HEIGHT = 0.5;  % minimum height for the figurePanel during resize
         % (for small screens, the actual fp_height
         % might be smaller)
         
@@ -178,6 +174,17 @@ classdef arrShow < handle
                                  % true. The flag is a quick and dirty workaround 
                                  % to avoid endless loops if an error
                                  % persists in a second updFig call
+        processingResize = false;
+        
+        playTimer = [];         % timer driving asynchronous playback
+        playAutoRepeat = false; % remember whether playback should loop
+        playLastTick = [];
+        playStartTick = [];
+        playDisplayedFrames = 0;
+        playFrameRemainder = 0;
+        playSlowWarningIssued = false;
+        fpsTextH = [];
+        fpsEditH = [];
     end
     
     properties (Constant, GetAccess = public)
@@ -415,6 +422,7 @@ classdef arrShow < handle
 
             % send group class
             obj.sendGroup = asSendGroupClass(obj.trph);
+            obj.initFramerateControl();
             
             
             % init the figure context menu (first entries are created
@@ -2110,6 +2118,8 @@ classdef arrShow < handle
         
         function pausePlay(obj)
             % deactivates the "play mode"
+            obj.stopPlayTimer();
+            obj.setMouseMotionTracking(true);
             
             % Replace pause button by a play button
             obj.setupPlayButton
@@ -2120,12 +2130,12 @@ classdef arrShow < handle
         
         function setFramerate(obj, framerate)
             if nargin < 2
-                frStr = mydlg('Please enter framerate','Please enter framerate',num2str(obj.framerate));
-                framerate = str2double(frStr);
+                framerate = obj.getFramerateFromControl();
             end
             if isscalar(framerate) && isfinite(framerate) && framerate > 0
                 obj.framerate = framerate;
             end
+            obj.updateFramerateControl();
         end
         
         function framerate = getFramerate(obj)
@@ -2152,12 +2162,21 @@ classdef arrShow < handle
                 framerate = obj.framerate;
             else
                 % else just use the objects standard setting
-                obj.framerate = framerate;
+                obj.setFramerate(framerate);
+                framerate = obj.framerate;
             end
             
+            obj.stopPlayTimer();
             
             % set playAlong dim to true
             obj.playAlongDim = true;
+            obj.playAutoRepeat = autoRepeat;
+            obj.playLastTick = tic;
+            obj.playStartTick = tic;
+            obj.playDisplayedFrames = 0;
+            obj.playFrameRemainder = 0;
+            obj.playSlowWarningIssued = false;
+            obj.setMouseMotionTracking(false);
             
             % Replace play button by a pause button
             set(obj.tbh.play,'Tag','Annotation.pause',...
@@ -2184,41 +2203,17 @@ classdef arrShow < handle
                 % dimension
                 if currFrame == lastFrame
                     obj.selection.setCurrentVcValue(1)
-                    currFrame = 1;
                 end
-                
-                % loop
-                i = currFrame;
-                while i <= lastFrame
-
-                    % avoid an error when someone closes the asObj during
-                    % play mode
-                    if ~isvalid(obj)
-                        return;
-                    end
-                    
-                    % check if someone hit the pause button
-                    if ~obj.playAlongDim
-                        break;
-                    end
-                    
-                    if i == lastFrame
-                        if autoRepeat
-                            obj.selection.setCurrentVcValue(1)
-                            i = 1;
-                        else
-                            break;
-                        end
-                    else
-                        obj.selection.increaseCurrentVc();
-                        i = i + 1;                        
-                    end                     
-                    pause(1/framerate);
-                end
+                timerPeriod = max(0.001, round((1 / framerate) * 1000) / 1000);
+                obj.playTimer = timer(...
+                    'ExecutionMode','fixedSpacing',...
+                    'BusyMode','drop',...
+                    'Period',timerPeriod,...
+                    'TimerFcn',@(src, evnt)obj.playTimerCb());
+                start(obj.playTimer);
+            else
+                obj.pausePlay();
             end
-            
-            obj.pausePlay();
-            
         end               
         
         function createWorkspaceObject(obj)
@@ -2239,6 +2234,10 @@ classdef arrShow < handle
                 end
             end
             ms('\n');
+        end
+        
+        function delete(obj)
+            obj.stopPlayTimer();
         end
         
         function about(obj)
@@ -2547,10 +2546,11 @@ classdef arrShow < handle
             % button, its creation routines are put in this dedicated
             % function.)
             
-            htmlToolTip = ['<html><b>Play along plot dimension:</b><br><table>',...
-                '<tr><td><u>Normal click</u></td><td>: Play until the last frame is reached</td></tr>',...
-                '<tr><td><u>Ctrl+click</u></td>: Play continuously (auto repeat)</td></tr>',...
-                '<tr><td><u>Shift+click</u></td>: Set framerate</td></tr></table></html>'];
+            htmlToolTip = sprintf([...
+                'Play along plot dimension\n\n',...
+                'Normal click: Play until the last frame is reached\n',...
+                'Ctrl+click: Play continuously (auto repeat)\n\n',...
+                'Use the FPS field in the control panel to change playback speed.']);
             
             if ~isfield(obj.tbh,'play')
                 obj.tbh.play = uipushtool('Parent',obj.tbh.base,'Tag','Annotation.play',...
@@ -2563,15 +2563,12 @@ classdef arrShow < handle
             
             function playButtonCb()
                 modifiers = get(obj.fh,'currentModifier');
+                obj.setFramerate();
                 if isempty(modifiers)
                     obj.play([],false);
                 else
                     if ismember('control',modifiers)
                         obj.play([],true);
-                    else
-                        if ismember('shift',modifiers)
-                            obj.setFramerate();
-                        end
                     end
                 end
             end
@@ -2935,10 +2932,10 @@ classdef arrShow < handle
             obj.tbh.base = toolBar;
             
             % multi function colorbar button
-            htmlToolTip = ['<html><b>Colorbar:</b><br><table>',...
-                '<tr><td><u>Normal click</u></td><td>: Show colorbar</td></tr>',...
-                '<tr><td><u>Ctrl+click:</u></td>: Send current colormap</td></tr></table>',...
-                '</html>'];
+            htmlToolTip = sprintf([...
+                'Colorbar\n\n',...
+                'Normal click: Show colorbar\n',...
+                'Ctrl+click: Send current colormap']);
             obj.tbh.colorbar = uitoggletool('Parent',toolBar,'Tag','Annotation.myInsertColorbar',...
                 'TooltipString', htmlToolTip,...
                 'ClickedCallback', @(src,evnt)colorbarCb(obj),...
@@ -2961,12 +2958,11 @@ classdef arrShow < handle
             end
             
             % multi function zoom button
-            htmlToolTip = ['<html><b>Zoom:</b><br><table>',...
-                '<tr><td><u>Normal click</u></td><td>: Enable interactive zoom (z)</td></tr>',...
-                '<tr><td><u>Ctrl+click:</u></td>: Send zoom</td></tr></table>',...
-                '<br><p style="width:180px; text-align:left"><i>',...
-                'Hint:<br>Zooming is also possible by pressing <br><b>control+mouse wheel</b>',...
-                '</i></p></html>'];
+            htmlToolTip = sprintf([...
+                'Zoom\n\n',...
+                'Normal click: Enable interactive zoom (z)\n',...
+                'Ctrl+click: Send zoom\n\n',...
+                'Hint: Zooming is also possible by pressing control+mouse wheel']);
             obj.tbh.zoom = uitoggletool('Parent',toolBar,'Tag','loration.ZoomOut',...
                 'TooltipString', htmlToolTip,...
                 'ClickedCallback', @(src, evnt)zoomButtonCb(),...
@@ -3011,10 +3007,11 @@ classdef arrShow < handle
                 'CData',obj.icons.asBrowse);
             
             % multi function lineup button
-            htmlToolTip = ['<html><b>Lineup all open arrayShow windows:</b><br><table>',...
-                '<tr><td><u>Normal click:</u></td><td>Open lineup dialog</td></tr>',...
-                '<tr><td><u>Shift+click:</u></td>Lineup to the top left arrayShow window</td></tr>',...
-                '<tr><td><u>Ctrl+click:</u></td>Lineup to the top left of the screen</td></tr></table></html>'];
+            htmlToolTip = sprintf([...
+                'Lineup all open arrayShow windows\n\n',...
+                'Normal click: Open lineup dialog\n',...
+                'Shift+click: Lineup to the top left arrayShow window\n',...
+                'Ctrl+click: Lineup to the top left of the screen']);
             uipushtool('Parent',toolBar,'Tag','Annotation.lineup',...
                 'TooltipString', htmlToolTip,...
                 'ClickedCallback', @(src, evnt)lineupButtonCb,...
@@ -3035,9 +3032,10 @@ classdef arrShow < handle
             end
             
             % multi function send button
-            htmlToolTip = ['<html><b>All sendings:</b><br><table>',...
-                '<tr><td><u>Normal click</u></td><td>: Deactivate all sendings</td></tr>',...
-                '<tr><td><u>Ctrl+click</u></td>: Send all</td></tr></table></html>'];
+            htmlToolTip = sprintf([...
+                'All sendings\n\n',...
+                'Normal click: Deactivate all sendings\n',...
+                'Ctrl+click: Send all']);
             uipushtool('Parent',toolBar,'Tag','Annotation.sendNone',...
                 'TooltipString', htmlToolTip,...
                 'ClickedCallback', @(src, evnt)sendAllCb(),...
@@ -3067,10 +3065,11 @@ classdef arrShow < handle
                 'CData',obj.icons.lock);
             
             % create workspace object or image array
-            htmlToolTip = ['<html><b>Assign data to a variable in workspace:</b><br><table>',...
-                '<tr><td><u>Normal click</u></td><td>: Create handle to this arrayShow object</td></tr>',...
-                '<tr><td><u>Shift+click</u></td>: Copy all images</td></tr>',...
-                '<tr><td><u>Ctrl+click</u></td>: Copy current image</td></tr></table></html>'];
+            htmlToolTip = sprintf([...
+                'Assign data to a variable in workspace\n\n',...
+                'Normal click: Create handle to this arrayShow object\n',...
+                'Shift+click: Copy all images\n',...
+                'Ctrl+click: Copy current image']);
             uipushtool('Parent',toolBar,'Tag','Annotation.createWsObj',...
                 'TooltipString', htmlToolTip,...
                 'ClickedCallback', @(src, evnt)createWsObjButtonCb(),...
@@ -3299,6 +3298,192 @@ classdef arrShow < handle
             end
         end
         
+        function playTimerCb(obj)
+            if ~isvalid(obj) || ~obj.playAlongDim
+                obj.pausePlay();
+                return;
+            end
+            
+            if isempty(obj.playLastTick)
+                obj.playLastTick = tic;
+                return;
+            end
+            
+            elapsedTime = toc(obj.playLastTick);
+            obj.playLastTick = tic;
+            framesToAdvance = floor(elapsedTime * obj.framerate + obj.playFrameRemainder);
+            obj.playFrameRemainder = elapsedTime * obj.framerate + obj.playFrameRemainder - framesToAdvance;
+            
+            if framesToAdvance < 1
+                return;
+            end
+            
+            plotDim = obj.selection.getPlotDim();
+            if isempty(plotDim)
+                obj.pausePlay();
+                return;
+            end
+            
+            obj.selection.selectVco(plotDim);
+            dims = obj.selection.getDimensions();
+            currFrame = str2double(obj.selection.getCurrentVcValue);
+            lastFrame = dims(1, plotDim);
+            
+            if ~isscalar(currFrame) || ~isfinite(currFrame)
+                obj.pausePlay();
+                return;
+            end
+            
+            if lastFrame <= 1
+                obj.pausePlay();
+                return;
+            end
+            
+            if obj.playAutoRepeat
+                targetFrame = mod((currFrame - 1) + framesToAdvance, lastFrame) + 1;
+                if targetFrame ~= currFrame
+                    obj.selection.setCurrentVcValue(targetFrame);
+                    obj.playDisplayedFrames = obj.playDisplayedFrames + 1;
+                end
+            else
+                targetFrame = min(currFrame + framesToAdvance, lastFrame);
+                if targetFrame ~= currFrame
+                    obj.selection.setCurrentVcValue(targetFrame);
+                    obj.playDisplayedFrames = obj.playDisplayedFrames + 1;
+                end
+                if targetFrame >= lastFrame
+                    obj.pausePlay();
+                end
+            end
+            
+            obj.updatePlaybackFpsWarning();
+        end
+        
+        function stopPlayTimer(obj)
+            if isempty(obj.playTimer)
+                obj.playLastTick = [];
+                obj.playStartTick = [];
+                obj.playDisplayedFrames = 0;
+                obj.playFrameRemainder = 0;
+                obj.playSlowWarningIssued = false;
+                return;
+            end
+            
+            try
+                stop(obj.playTimer);
+            catch %#ok<CTCH>
+            end
+            
+            try
+                delete(obj.playTimer);
+            catch %#ok<CTCH>
+            end
+            
+            obj.playTimer = [];
+            obj.playLastTick = [];
+            obj.playStartTick = [];
+            obj.playDisplayedFrames = 0;
+            obj.playFrameRemainder = 0;
+            obj.playSlowWarningIssued = false;
+        end
+        
+        function initFramerateControl(obj)
+            if ishandle(obj.cph)
+                bgColor = get(obj.cph,'BackgroundColor');
+            else
+                bgColor = get(0,'defaultuicontrolbackgroundcolor');
+            end
+            
+            obj.fpsTextH = uicontrol(...
+                'Style','text',...
+                'Parent',obj.cph,...
+                'Units','normalized',...
+                'Position',[0.395 0.56 0.045 0.18],...
+                'HorizontalAlignment','left',...
+                'BackgroundColor',bgColor,...
+                'ForegroundColor','black',...
+                'String','FPS',...
+                'TooltipString','Playback framerate');
+            
+            obj.fpsEditH = uicontrol(...
+                'Style','edit',...
+                'Parent',obj.cph,...
+                'Units','normalized',...
+                'Position',[0.44 0.53 0.055 0.18],...
+                'BackgroundColor','white',...
+                'ForegroundColor','black',...
+                'HorizontalAlignment','left',...
+                'String',num2str(obj.framerate),...
+                'TooltipString','Playback framerate in frames per second',...
+                'Callback',@(src,evnt)obj.framerateEditCb());
+        end
+        
+        function framerateEditCb(obj)
+            framerate = obj.getFramerateFromControl();
+            if isscalar(framerate) && isfinite(framerate) && framerate > 0
+                obj.framerate = framerate;
+            end
+            obj.updateFramerateControl();
+        end
+        
+        function framerate = getFramerateFromControl(obj)
+            framerate = obj.framerate;
+            if ishandle(obj.fpsEditH)
+                frStr = get(obj.fpsEditH,'String');
+                newFramerate = str2double(frStr);
+                if isscalar(newFramerate) && isfinite(newFramerate) && newFramerate > 0
+                    framerate = newFramerate;
+                end
+            end
+        end
+        
+        function updateFramerateControl(obj)
+            if ishandle(obj.fpsEditH)
+                set(obj.fpsEditH,...
+                    'String',num2str(obj.framerate),...
+                    'TooltipString','Playback framerate in frames per second');
+            end
+        end
+        
+        function updatePlaybackFpsWarning(obj)
+            if isempty(obj.playStartTick) || obj.playDisplayedFrames < 5
+                return;
+            end
+            
+            elapsedPlaybackTime = toc(obj.playStartTick);
+            if elapsedPlaybackTime < 1
+                return;
+            end
+            
+            actualDisplayFps = obj.playDisplayedFrames / max(elapsedPlaybackTime, eps);
+            if ~obj.playSlowWarningIssued && actualDisplayFps < 0.9 * obj.framerate
+                obj.playSlowWarningIssued = true;
+                warning('arrShow:playbackPerformance', ...
+                    ['Requested playback FPS (%0.3g) exceeds redraw throughput. ',...
+                    'Playback will skip frames to preserve timing; actual displayed FPS is about %0.3g.'], ...
+                    obj.framerate, actualDisplayFps);
+            end
+            
+            if ishandle(obj.fpsEditH)
+                set(obj.fpsEditH,'TooltipString',sprintf(...
+                    'Playback framerate in frames per second. Requested: %0.3g, displayed: about %0.3g.',...
+                    obj.framerate, actualDisplayFps));
+            end
+        end
+        
+        function setMouseMotionTracking(obj, enabled)
+            if ~ishandle(obj.fh)
+                return;
+            end
+            
+            if enabled
+                set(obj.fh,'WindowButtonMotionFcn',@(src, evnt)obj.mouseMovementCb);
+            else
+                set(obj.fh,'WindowButtonMotionFcn','');
+                obj.processingCallback = false;
+            end
+        end
+        
     end
     methods (Access = protected)
         function cpObj = copyElement(obj)
@@ -3307,10 +3492,22 @@ classdef arrShow < handle
         
         function closeReq(obj, src)
             obj.msg('executing close request from handle %d\n',src);
+            obj.stopPlayTimer();
             if isfield(obj.infotext, 'closeLargeWindow')
                 obj.infotext.closeLargeWindow;
             end
-            delete(src);
+            if ishandle(src)
+                set(src,...
+                    'CloseRequestFcn','',...
+                    'KeyPressFcn','',...
+                    'WindowButtonMotionFcn','',...
+                    'WindowButtonDownFcn','',...
+                    'WindowButtonUpFcn','',...
+                    'WindowScrollWheelFcn','');
+                set(src,'UserData',[]);
+                drawnow;
+                delete(src);
+            end
             delete(obj);
             arrShow.cleanGlobalAsArray
         end
@@ -3318,6 +3515,10 @@ classdef arrShow < handle
         function cpResize(obj)
             % controlPanel resize callback
             % (assures, that the control panel keeps it's height)
+            if ~ishandle(obj.cph)
+                return;
+            end
+            
             oldUnits = get(obj.cph,'Units');
             
             % set units to centimeters and deactivate resize callback
@@ -3327,11 +3528,12 @@ classdef arrShow < handle
             pos = get(obj.cph,'Position');
             % pos = [left bot width height]
             
-            h = obj.CP_HEIGHT;
-            offset = pos(4) - h;
-            newBot = pos(2) + offset;
+            h = obj.sanitizeLength(obj.CP_HEIGHT);
+            offset = obj.sanitizeLength(pos(4)) - h;
+            newBot = obj.sanitizePositionScalar(pos(2) + offset);
             
-            newPos = [pos(1), newBot, pos(3), h];
+            newPos = [obj.sanitizePositionScalar(pos(1)), newBot, ...
+                obj.sanitizeLength(pos(3)), obj.sanitizeLength(h)];
             
             set(obj.cph,'Position',newPos);
             
@@ -3343,6 +3545,10 @@ classdef arrShow < handle
         function bpResize(obj)
             % bottom Panel resize callback
             % (assures, that the position panel keeps it's height)
+            if ~ishandle(obj.bph)
+                return;
+            end
+            
             oldUnits = get(obj.bph,'Units');
             
             % set units to centimeters and deactivate resize callback
@@ -3351,9 +3557,10 @@ classdef arrShow < handle
             pos = get(obj.bph,'Position');
             % pos = [left bot width height]
             
-            h = obj.BP_HEIGHT;
+            h = obj.sanitizeLength(obj.BP_HEIGHT);
             
-            newPos = [pos(1), pos(2), pos(3), h];
+            newPos = [obj.sanitizePositionScalar(pos(1)), obj.sanitizePositionScalar(pos(2)), ...
+                obj.sanitizeLength(pos(3)), obj.sanitizeLength(h)];
             
             set(obj.bph,'Position',newPos);
             
@@ -3367,48 +3574,100 @@ classdef arrShow < handle
         function fpResize(obj, suppressImageRedraw)
             % figurePanel resize callback
             %             set(obj.fh,'ResizeFcn',[]);
+            if ~ishandle(obj.fh) || ~ishandle(obj.fph) || obj.processingResize
+                return;
+            end
             
             if nargin < 2
                 suppressImageRedraw = false;
             end
             
-            % backup unit settings
-            fhUnits = get(obj.fh,'Units');
-            fpUnits = get(obj.fph,'Units');
-            
-            % set units to centimeters
-            set(obj.fh,'Units','Centimeters');
-            set(obj.fph,'Units','Centimeters');
-            
-            % get new size of the home figure
-            pos = get(obj.fh,'Position');
-            % pos = [left bot width height]
-            
-            % create new position vector for the figurePanel
-            newPos = [0, obj.BP_HEIGHT, pos(3), pos(4) - obj.CP_HEIGHT - obj.BP_HEIGHT ];
-            set(obj.fph,'Position',newPos);
-            
-            % save pixel position to object
-            set(obj.fh,'Units','pixel');
-            obj.figurePosition = get(obj.fh,'Position');
-            
-            % restore unit settings
-            set(obj.fh,'Units',fhUnits);
-            set(obj.fph,'Units',fpUnits);
-            
-            % call resize functions for control- and bottom panel
-            obj.cpResize;   % control panel
-            obj.bpResize;   % bottom panel
-            
-            if ~suppressImageRedraw
-                obj.updFig;
+            if strcmp(get(obj.fh,'BeingDeleted'),'on') || strcmp(get(obj.fph,'BeingDeleted'),'on')
+                return;
             end
             
-            if obj.sendWdwSize
-                obj.sendFigureSize;
+            obj.processingResize = true;
+            fhUnits = '';
+            fpUnits = '';
+            
+            try
+                % backup unit settings
+                fhUnits = get(obj.fh,'Units');
+                fpUnits = get(obj.fph,'Units');
+                
+                % set units to centimeters
+                set(obj.fh,'Units','Centimeters');
+                set(obj.fph,'Units','Centimeters');
+                
+                % get new size of the home figure
+                pos = get(obj.fh,'Position');
+                % pos = [left bot width height]
+                
+                % create new position vector for the figurePanel
+                figPanelHeight = obj.sanitizeLength(pos(4) - obj.CP_HEIGHT - obj.BP_HEIGHT);
+                newPos = [0, obj.sanitizePositionScalar(obj.BP_HEIGHT), ...
+                    obj.sanitizeLength(pos(3)), figPanelHeight];
+                
+                if all(isfinite(newPos(3:4))) && all(newPos(3:4) >= 0)
+                    set(obj.fph,'Position',newPos);
+                end
+                
+                % save pixel position to object
+                set(obj.fh,'Units','pixel');
+                obj.figurePosition = get(obj.fh,'Position');
+                
+                % restore unit settings
+                if ishandle(obj.fh)
+                    set(obj.fh,'Units',fhUnits);
+                end
+                if ishandle(obj.fph)
+                    set(obj.fph,'Units',fpUnits);
+                end
+                
+                % call resize functions for control- and bottom panel
+                obj.cpResize;   % control panel
+                obj.bpResize;   % bottom panel
+                
+                if ~suppressImageRedraw && ...
+                        pos(3) > 0 && figPanelHeight >= obj.FP_MIN_HEIGHT
+                    obj.updFig;
+                end
+                
+                if obj.sendWdwSize
+                    obj.sendFigureSize;
+                end
+            catch
+                if ishandle(obj.fh) && ~isempty(fhUnits)
+                    try %#ok<TRYNC>
+                        set(obj.fh,'Units',fhUnits);
+                    end
+                end
+                if ishandle(obj.fph) && ~isempty(fpUnits)
+                    try %#ok<TRYNC>
+                        set(obj.fph,'Units',fpUnits);
+                    end
+                end
             end
+            
+            obj.processingResize = false;
             
             %             set(obj.fh,'ResizeFcn',@(src, evnt)obj.fpResize);
+        end
+
+        function value = sanitizeLength(obj, value)
+            %#ok<INUSD>
+            if ~isscalar(value) || ~isfinite(value)
+                value = 0;
+            else
+                value = max(0, value);
+            end
+        end
+        
+        function value = sanitizePositionScalar(obj, value)
+            %#ok<INUSD>
+            if ~isscalar(value) || ~isfinite(value)
+                value = 0;
+            end
         end
         
         function updFig(obj)
@@ -4088,66 +4347,83 @@ classdef arrShow < handle
             if ~obj.processingCallback
                 obj.processingCallback = true;
                 obj.mouseMovementCbTime = tic;
-                
-                if obj.mouseMovementMode == 0
-                    % normal mode: just update the cursor position
-                    for i = 1 : length(obj.ih)
-                        currAxes = get(obj.ih(i),'Parent');
-                        position = get(currAxes,'CurrentPoint');
+                try
+                    if obj.mouseMovementMode == 0
+                        % normal mode: just update the cursor position
+                        for i = 1 : length(obj.ih)
+                            if ~ishandle(obj.ih(i))
+                                continue;
+                            end
+                            currAxes = get(obj.ih(i),'Parent');
+                            if isempty(currAxes) || ~ishandle(currAxes)
+                                continue;
+                            end
+                            position = get(currAxes,'CurrentPoint');
 
-                        if arrShow.mouseInsideAxes(position, currAxes)
-                            x = round(position(1,1));
-                            y = round(position(1,2));
+                            if arrShow.mouseInsideAxes(position, currAxes)
+                                x = round(position(1,1));
+                                y = round(position(1,2));
 
-                            obj.cursor.setPosition([y,x],false);
-                            break;
+                                obj.cursor.setPosition([y,x],false);
+                                break;
+                            end
+                        end
+                    else % (obj.mouseMovementMode ~= 0)
+                        % we are either in windowing or dragging mode
+                        
+                        % get the number of pixels, the cursor has moved
+                        currentAxes = obj.window.getAxesHandle();
+                        if isempty(currentAxes) || ~ishandle(currentAxes)
+                            return;
+                        end
+                        refC   = obj.mouseReferencePoint;
+                        currC  = get(currentAxes,'CurrentPoint');
+                        
+                        % the x/y coordinates are swapped
+                        difference(2) =  refC(1,1) - currC(1,1);
+                        difference(1) =  refC(1,2) - currC(1,2);
+
+                        
+                        if obj.mouseMovementMode == 1 % mouse windowing mode
+                            % invert x-direction to behave similar to siemens
+                            difference(2) = -difference(2);
+
+                            % standardize with image dimensions
+                            difference = difference .* [1,4] ./ obj.statistics.getDimensions();
+
+                            % get current center and  width; standardize with image
+                            % width
+                            CW = obj.window.getCW();
+                            imageWidth = obj.window.getDataWidth();
+                            CW = CW / imageWidth;
+
+                            % derive and apply new center and width settings
+                            CW = (CW + difference) * imageWidth;
+                            obj.window.setCW(CW,false);
+
+                            % set current cursor position as new reference
+                            obj.mouseReferencePoint = currC;
+                            
+                        else % dragging mode
+
+                            % shift the image
+                            obj.shiftImage(difference);
+
+                            % get the current point in the potentially altered
+                            % FOV
+                            currC  = get(currentAxes,'CurrentPoint');
+                                                    
+                            % set current cursor position as new reference
+                            obj.mouseReferencePoint = currC;
                         end
                     end
-                else % (obj.mouseMovementMode ~= 0)
-                    % we are either in windowing or dragging mode
-                    
-                    % get the number of pixels, the cursor has moved
-                    currentAxes = obj.window.getAxesHandle();
-                    refC   = obj.mouseReferencePoint;
-                    currC  = get(currentAxes,'CurrentPoint');
-                    
-                    % the x/y coordinates are swapped
-                    difference(2) =  refC(1,1) - currC(1,1);
-                    difference(1) =  refC(1,2) - currC(1,2);
-
-                    
-                    if obj.mouseMovementMode == 1 % mouse windowing mode                    
-                        % invert x-direction to behave similar to siemens
-                        difference(2) = -difference(2);
-
-                        % standardize with image dimensions
-                        difference = difference .* [1,4] ./ obj.statistics.getDimensions();
-
-                        % get current center and  width; standardize with image
-                        % width
-                        CW = obj.window.getCW();
-                        imageWidth = obj.window.getDataWidth();
-                        CW = CW / imageWidth;
-
-                        % derive and apply new center and width settings
-                        CW = (CW + difference) * imageWidth;
-                        obj.window.setCW(CW,false);
-
-                        % set current cursor position as new reference
-                        obj.mouseReferencePoint = currC;
-                        
-                    else % dragging mode
-
-                        % shift the image
-                        obj.shiftImage(difference);
-
-                        % get the current point in the potentially altered
-                        % FOV
-                        currC  = get(currentAxes,'CurrentPoint');
-                                                
-                        % set current cursor position as new reference
-                        obj.mouseReferencePoint = currC;
-                    end                        
+                catch ME
+                    obj.processingCallback = false;
+                    if isempty(strfind(ME.message,'Invalid or deleted object'))
+                        rethrow(ME);
+                    else
+                        return;
+                    end
                 end
                 obj.processingCallback = false;
             else

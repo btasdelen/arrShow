@@ -3,76 +3,105 @@ function R = mydlg(promt, dlg_title, defAns, pos)
 % to close.
 if nargin < 4
     pos = [500 500 210 90];
+end
 if nargin < 3
     defAns = '';
-    if nargin < 2
-        dlg_title = '';
-        if nargin < 1
-            promt = 'Please enter sth.';
+end
+if nargin < 2
+    dlg_title = '';
+end
+if nargin < 1
+    promt = 'Please enter sth.';
+end
+
+R = [];
+
+bgColor = java.awt.Color(240/255,240/255,240/255);
+fgColor = java.awt.Color(0,0,0);
+editBgColor = java.awt.Color(1,1,1);
+btnBgColor = java.awt.Color(235/255,235/255,235/255);
+prefWidth = max(pos(3), 210);
+prefHeight = max(pos(4), 90);
+
+import java.awt.BorderLayout
+import java.awt.Dimension
+import java.awt.FlowLayout
+import javax.swing.BorderFactory
+import javax.swing.JButton
+import javax.swing.JComponent
+import javax.swing.JDialog
+import javax.swing.JLabel
+import javax.swing.JPanel
+import javax.swing.JTextField
+import java.awt.event.KeyEvent
+
+dlg = javaObjectEDT(JDialog([], char(dlg_title), true));
+dlg.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+dlg.setAlwaysOnTop(true);
+dlg.setResizable(false);
+
+content = dlg.getContentPane();
+content.setLayout(BorderLayout(10,10));
+content.setBackground(bgColor);
+
+mainPanel = javaObjectEDT(JPanel(BorderLayout(0,8)));
+mainPanel.setBackground(bgColor);
+mainPanel.setBorder(BorderFactory.createEmptyBorder(10,10,10,10));
+
+label = javaObjectEDT(JLabel(char(promt)));
+label.setForeground(fgColor);
+label.setBackground(bgColor);
+label.setOpaque(true);
+mainPanel.add(label, BorderLayout.NORTH);
+
+editField = javaObjectEDT(JTextField(char(defAns)));
+editField.setBackground(editBgColor);
+editField.setForeground(fgColor);
+editField.setCaretColor(fgColor);
+mainPanel.add(editField, BorderLayout.CENTER);
+
+buttonPanel = javaObjectEDT(JPanel(FlowLayout(FlowLayout.RIGHT,5,0)));
+buttonPanel.setBackground(bgColor);
+
+okButton = javaObjectEDT(JButton('O.k.'));
+okButton.setBackground(btnBgColor);
+okButton.setForeground(fgColor);
+
+cancelButton = javaObjectEDT(JButton('Cancel'));
+cancelButton.setBackground(btnBgColor);
+cancelButton.setForeground(fgColor);
+
+buttonPanel.add(okButton);
+buttonPanel.add(cancelButton);
+
+content.add(mainPanel, BorderLayout.CENTER);
+content.add(buttonPanel, BorderLayout.SOUTH);
+
+set(handle(okButton,'CallbackProperties'),'ActionPerformedCallback',@okCb);
+set(handle(cancelButton,'CallbackProperties'),'ActionPerformedCallback',@cancelCb);
+set(handle(editField,'CallbackProperties'),'ActionPerformedCallback',@okCb);
+set(handle(editField,'CallbackProperties'),'KeyPressedCallback',@keyPressedCb);
+
+dlg.getRootPane().setDefaultButton(okButton);
+dlg.setPreferredSize(Dimension(prefWidth,prefHeight));
+dlg.pack();
+dlg.setLocation(pos(1),pos(2));
+javaMethodEDT('requestFocusInWindow',editField);
+dlg.setVisible(true);
+
+    function okCb(~, ~)
+        R = char(editField.getText());
+        dlg.dispose();
+    end
+
+    function cancelCb(~, ~)
+        R = [];
+        dlg.dispose();
+    end
+
+    function keyPressedCb(~, evnt)
+        if evnt.getKeyCode() == KeyEvent.VK_ESCAPE
+            cancelCb();
         end
     end
 end
-end
-
-% Returns a double value.
-R = []; % Default, in case user closes GUI.
-S.fh = figure('units','pixels',...
-    'position',pos,...
-    'menubar','none',...
-    'numbertitle','off',...
-    'name',dlg_title,... % Here is the title.
-    'resize','off');
-S.ed = uicontrol('style','edit',...
-    'units','pix',...
-    'position',[10 35 pos(3)-20 30],...
-    'backgroundcolor','w',...
-    'horizontalalignment','left',...
-    'string',defAns,...
-    'keypressfcn',{@ed_kpfcn});
-S.tx = uicontrol('style','text',...
-    'units','pix',...
-    'position',[10 65 180 20],...
-    'backgroundcolor',get(S.fh,'color'),...
-    'horizontalalignment','left',...
-    'string',promt); % The prompt
-S.pb(1) = uicontrol('style','pushbutton',...
-    'units','pix',...
-    'position',[95 5 50 25],...
-    'string','O.k.',... % The O.k. button.
-    'callback',{@pb_call,S});
-S.pb(2) = uicontrol('style','pushbutton',...
-    'units','pix',...
-    'position',[150 5 50 25],...
-    'string','Cancel',... % The cancel button.
-    'callback',{@pb_call,S});
-uicontrol(S.ed) % Put blinking cursor in edit box.
-uiwait(S.fh) % Wait till the GUI closes.
-if isempty(R)
-    R = []; % So we return a double, not an empty string or nan.
-else
-%     R = str2double(R);
-end
-
-    function [] = pb_call(varargin)
-    % Callback for pushbuttons.
-        if varargin{1}==S.pb(1)
-            R = get(S.ed,'string');
-        end
-        close(S.fh)
-    end
-
-    function [] = ed_kpfcn(varargin)
-    % Keypressfcn for editbox. Could be modified to delete any input
-    % except for 3 or 4.
-    switch varargin{2}.Key
-        case 'return'
-            drawnow
-            R = get(S.ed,'string');
-            close(S.fh);
-        case 'escape'
-            R = [];
-            close(S.fh);
-            
-    end  
-    end
-end 
