@@ -368,8 +368,7 @@ classdef asSelectionClass < handle
                 if isnumeric(value) && isscalar(value)
                     value = num2str(value);
                 end
-                obj.vcos{obj.selVcoNr}.setStr(value);
-                obj.updFig();
+                obj.vcos{obj.selVcoNr}.setStr(value, true);
             end
         end
         
