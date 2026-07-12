@@ -2296,6 +2296,11 @@ classdef arrShow < handle
                 roiPos = [];
             end
             
+            incomingRoiType = '';
+            if isstruct(roiPos) && isfield(roiPos,'type')
+                incomingRoiType = lower(roiPos.type);
+            end
+            
             % check if a previous ROI exists
             if obj.roiExists()
                 if isempty(roiPos)
@@ -2304,11 +2309,22 @@ classdef arrShow < handle
                     delete(obj.roi);
                     
                 else
-                    % we have a roi position vector, so just update the
-                    % already existing ROI
-                    obj.roi.setPosition(roiPos);                                        
+                    % if the incoming ROI type differs from the existing
+                    % one, recreate it so circle/polygon semantics are
+                    % preserved when sending to relatives.
+                    if ~isempty(incomingRoiType) && ~strcmp(obj.roi.getType(), incomingRoiType)
+                        delete(obj.roi);
+                        obj.roi = [];
+                    else
+                        % we have a roi position vector, so just update the
+                        % already existing ROI
+                        obj.roi.setPosition(roiPos);
+                        roiPos = [];
+                    end
                 end
-            else            
+            end
+            
+            if ~obj.roiExists()
                 % We don't have an old ROI and
                 % really want to create a new one
 
@@ -3703,7 +3719,7 @@ classdef arrShow < handle
             roiPos = [];
             if ~isempty(obj.roi)
                 if isvalid(obj.roi)
-                    roiPos = obj.roi.getPosition;
+                    roiPos = obj.roi.getPositionPayload;
                     delete(obj.roi);
                 end
             end

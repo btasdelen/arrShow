@@ -36,7 +36,18 @@ classdef asRoiClass < handle
 %             obj.objPoly = images.roi.Polygon(parentAxesHandle, 'Color', 'green');
             if isempty(roiPos)
                 obj.objPoly = drawpolygon(parentAxesHandle, 'Color', 'green');
-
+            elseif isstruct(roiPos) && isfield(roiPos,'type')
+                switch lower(roiPos.type)
+                    case 'circle'
+                        obj.objPoly = drawcircle(parentAxesHandle, ...
+                            'Center', roiPos.center, ...
+                            'Radius', roiPos.radius, ...
+                            'Color', 'green');
+                    otherwise
+                        obj.objPoly = drawpolygon(parentAxesHandle, ...
+                            'Position', roiPos.position, ...
+                            'Color', 'green');
+                end
             elseif numel(roiPos) == 4
                 obj.objPoly = drawcircle(parentAxesHandle, 'Center', roiPos(1,:),...
                     'Radius', roiPos(2,1), 'Color', 'green');
@@ -108,9 +119,47 @@ classdef asRoiClass < handle
         function pos = getPosition(obj)
             pos = obj.objPoly.Position;
         end
+        
+        function type = getType(obj)
+            if isa(obj.objPoly,'images.roi.Circle')
+                type = 'circle';
+            else
+                type = 'polygon';
+            end
+        end
+        
+        function payload = getPositionPayload(obj)
+            switch obj.getType()
+                case 'circle'
+                    payload = struct(...
+                        'type','circle',...
+                        'center',obj.objPoly.Center,...
+                        'radius',obj.objPoly.Radius);
+                otherwise
+                    payload = struct(...
+                        'type','polygon',...
+                        'position',obj.objPoly.Position);
+            end
+        end
 
         function pos = setPosition(obj, pos)
-           obj.objPoly.Position = pos;
+           if isstruct(pos) && isfield(pos,'type')
+               switch lower(pos.type)
+                   case 'circle'
+                       if isa(obj.objPoly,'images.roi.Circle')
+                           obj.objPoly.Center = pos.center;
+                           obj.objPoly.Radius = pos.radius;
+                       elseif isfield(pos,'position')
+                           obj.objPoly.Position = pos.position;
+                       else
+                           obj.objPoly.Position = [pos.center; pos.radius .* [1 1]];
+                       end
+                   otherwise
+                       obj.objPoly.Position = pos.position;
+               end
+           else
+               obj.objPoly.Position = pos;
+           end
            obj.updateRoiString;
         end
 
@@ -266,7 +315,7 @@ classdef asRoiClass < handle
         end
             
         function callSendPositionCallback(obj)
-            obj.sendPositionCallback(obj.getPosition);
+            obj.sendPositionCallback(obj.getPositionPayload());
         end
         
         function setIgnoreZerosToggle(obj, toggle)
