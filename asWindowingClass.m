@@ -39,7 +39,9 @@ classdef asWindowingClass < handle
 
         % data type
         isComplex = false;
-        complexRef = [];        
+        complexRef = [];
+        isRgbImage = false;
+        rgbRef = [];
         
         
         % center and width
@@ -377,13 +379,18 @@ classdef asWindowingClass < handle
             % get reference image data
             refImage = get(obj.ih,'CData');
             ud = get(obj.ah,'UserData');
+            obj.isRgbImage = isfield(ud,'isRgbImage') && ud.isRgbImage;
+            obj.rgbRef = [];
             if size(refImage,3) == 3 && ...
-                    ~(isfield(ud,'isRgbImage') && ud.isRgbImage)
+                    ~obj.isRgbImage
                 % assume that we are dealing with an rgb array, made from a
                 % complex image. So get complex image from the axes
                 % UserData
                 obj.isComplex = true;
                 obj.complexRef = ud.cplxImg;
+            elseif obj.isRgbImage
+                obj.isComplex = false;
+                obj.rgbRef = ud.cplxImg;
             else
                 obj.isComplex = false;
             end
@@ -651,18 +658,20 @@ classdef asWindowingClass < handle
                 % derive axes limits
                 CLim(1)  = center - width/2;
                 CLim(2)  = CLim(1) + width;
-                                
+
+                % last check, if the width is too small to neglect rounding
+                % errors
+                if CLim(1) - CLim(2) == 0
+                    obj.enable(false);
+                    return;
+                end
+
                 if obj.isComplex
                     rgbImg = complex2rgb(obj.complexRef,256,CLim, obj.getPhaseColormapCb());
                     set(obj.ih,'CData',rgbImg);
+                elseif obj.isRgbImage
+                    set(obj.ih,'CData',obj.windowRgbImage(CLim));
                 else
-                    % last check, if the width is too small to neglect rounding
-                    % errors
-                    if CLim(1) - CLim(2) == 0
-                        obj.enable(false);
-                        return;
-                    end
-                    
                     % set limits to axes
                     set(obj.ah,'CLim',CLim);
                 end
@@ -745,7 +754,12 @@ classdef asWindowingClass < handle
         
         function CLim = getCLim(obj)
             % get current absolute windowing
-            CLim   = get(obj.ah,'CLim');
+            if obj.isRgbImage
+                CW = obj.getCW();
+                CLim = [CW(1) - CW(2)/2, CW(1) + CW(2)/2];
+            else
+                CLim   = get(obj.ah,'CLim');
+            end
         end
         
         function ah = getAxesHandle(obj)
@@ -772,6 +786,8 @@ classdef asWindowingClass < handle
                 if obj.isComplex
                     rgbImg = complex2rgb(obj.complexRef,256,CLim, obj.getPhaseColormapCb());
                     set(obj.ih,'CData',rgbImg);
+                elseif obj.isRgbImage
+                    set(obj.ih,'CData',obj.windowRgbImage(CLim));
                 else
                     set(obj.ah,'CLim',CLim);
                 end
@@ -954,13 +970,16 @@ classdef asWindowingClass < handle
                 refImage = get(obj.ih,'CData');
                 if obj.isComplex
                     refImage = abs(obj.complexRef);
+                elseif obj.isRgbImage
+                    refImage = obj.rgbRef;
                 end
                 
                 switch obj.rangeCalcMethod
                     case 1 % min / max
-                        mi = min(refImage(:));
-                        ma = max(refImage(:));
+                        mi = double(min(refImage(:)));
+                        ma = double(max(refImage(:)));
                     case 2 % percentile
+                        refImage = double(refImage);
                         mi = -asWindowingClass.vecPerc(-refImage(:),obj.percentile);
                         ma = asWindowingClass.vecPerc(refImage(:),obj.percentile);
                         
@@ -997,6 +1016,13 @@ classdef asWindowingClass < handle
                 obj.magniMax = ma;
                 obj.magniMin = mi;
             end
+        end
+
+        function rgbImg = windowRgbImage(obj, CLim)
+            width = CLim(2) - CLim(1);
+            rgbImg = (double(obj.rgbRef) - CLim(1)) ./ width;
+            rgbImg(rgbImg < 0) = 0;
+            rgbImg(rgbImg > 1) = 1;
         end
         
         function updateCWtext(obj)
@@ -1042,6 +1068,8 @@ classdef asWindowingClass < handle
             if obj.isComplex
                 rgbImg = complex2rgb(obj.complexRef,256,CLim, obj.getPhaseColormapCb());
                 set(obj.ih,'CData',rgbImg);
+            elseif obj.isRgbImage
+                set(obj.ih,'CData',obj.windowRgbImage(CLim));
             else
                 % set limits to axes
                 set(obj.ah,'CLim',CLim);
