@@ -376,12 +376,13 @@ classdef asWindowingClass < handle
             
             % get reference image data
             refImage = get(obj.ih,'CData');
-            if size(refImage,3) == 3
+            ud = get(obj.ah,'UserData');
+            if size(refImage,3) == 3 && ...
+                    ~(isfield(ud,'isRgbImage') && ud.isRgbImage)
                 % assume that we are dealing with an rgb array, made from a
                 % complex image. So get complex image from the axes
                 % UserData
                 obj.isComplex = true;
-                ud = get(obj.ah,'UserData');
                 obj.complexRef = ud.cplxImg;
             else
                 obj.isComplex = false;

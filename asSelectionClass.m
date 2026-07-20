@@ -30,6 +30,8 @@ classdef asSelectionClass < handle
         defaultPlotDim = 3;
         
         initStrings = {};
+        hiddenDims = [];
+        visibleDims = [];
         
         sendIcon = [];
     end
@@ -72,6 +74,8 @@ classdef asSelectionClass < handle
                             obj.sendIcon = option_value;
                         case 'offsets'
                             offsets = option_value;                            
+                        case 'hiddendims'
+                            obj.hiddenDims = option_value;
                         otherwise
                             warning('asSelectionClass:unknownOption',...
                                 'unknown option [%s]!\n',option);
@@ -98,7 +102,7 @@ classdef asSelectionClass < handle
             
         end
         
-        function reInit(obj, newDimensions, newSelection)
+        function reInit(obj, newDimensions, newSelection, hiddenDims)
             for i = 1 : length(obj.vcos)
                 obj.vcos{i}.delete(true);
             end
@@ -106,6 +110,10 @@ classdef asSelectionClass < handle
             
             obj.dims        = newDimensions;
             obj.initStrings = newSelection;
+            if nargin > 3
+                obj.hiddenDims = hiddenDims;
+            end
+            obj.hiddenDims = obj.hiddenDims(obj.hiddenDims >= 1 & obj.hiddenDims <= length(obj.dims));
             
             set(obj.fh,'HandleVisibility','on');
             obj.initValueChangerArray();
@@ -117,7 +125,7 @@ classdef asSelectionClass < handle
             for i = 1 : length(obj.vcos)
                 tag = obj.vcos{i}.getColonDimTag;
                 if tag ~= 0
-                    tags(tag) = i;
+                    tags(tag) = obj.vcos{i}.getId;
                 end
             end
             tags = tags(tags~=0); % TODO: Check if causes any dimensionality problem.
@@ -187,11 +195,13 @@ classdef asSelectionClass < handle
             % the object's properties
             if obj.enabled
                 if nargin == 2
-                    obj.selVcoNr = selVcoNr;
+                    obj.selVcoNr = obj.getVcoIndexFromDim(selVcoNr);
                 end
                 
                 % select the vco
-                obj.vcos{obj.selVcoNr}.select;
+                if ~isempty(obj.selVcoNr)
+                    obj.vcos{obj.selVcoNr}.select;
+                end
             end
         end
         
@@ -206,19 +216,25 @@ classdef asSelectionClass < handle
             if nargin < 2
                 retNumAsStr = true;
             end
-            noVcos = length(obj.dims);
-            addr = cell(noVcos, 1);
-            for i = 1 : noVcos
+            addr = obj.initStrings;
+            if isempty(addr) || length(addr) ~= length(obj.dims)
+                addr = repmat({'1'}, length(obj.dims), 1);
+            end
+            for i = 1 : length(obj.hiddenDims)
+                addr{obj.hiddenDims(i)} = ':';
+            end
+            for i = 1 : length(obj.vcos)
+                dim = obj.vcos{i}.getId;
                 str = obj.vcos{i}.getStr(includeOffset);
                 
                 if retNumAsStr
-                    addr{i} = str;
+                    addr{dim} = str;
                 else
                     [num,sflag] = str2num(str); % str is not necessarily a scalar
                     if sflag == 0
-                        addr{i} = str;
+                        addr{dim} = str;
                     else
-                        addr{i} = num;
+                        addr{dim} = num;
                     end
                 end
             end
@@ -231,17 +247,14 @@ classdef asSelectionClass < handle
             noVcos = length(obj.dims);
             
             if strcmp(obj.returnAs, 'number')
-                addr   = zeros(1,noVcos);
-                
-                for i = 1 : noVcos
-                    addr(1,i) = obj.vcos{i}.getStr(includeOffset);
-                end
+                addr = obj.getValueAsCell(false, includeOffset);
             else
                 if strcmp(obj.returnAs, 'string')
-                    addr   = obj.vcos{1}.getStr(includeOffset);
+                    addrCell = obj.getValueAsCell(true, includeOffset);
+                    addr = addrCell{1};
                     if noVcos > 1
                         for i = 2 : noVcos
-                            addr = strcat(addr,',',obj.vcos{i}.getStr(includeOffset));
+                            addr = strcat(addr,',',addrCell{i});
                         end
                     end
                 end
@@ -249,10 +262,9 @@ classdef asSelectionClass < handle
         end
         
         function offs = getOffsets(obj)
-            noVcos = length(obj.dims);
-            offs = zeros(noVcos,1);
-            for i = 1 : noVcos
-                offs(i) = obj.vcos{i}.getOffset();
+            offs = zeros(length(obj.dims),1);
+            for i = 1 : length(obj.vcos)
+                offs(obj.vcos{i}.getId) = obj.vcos{i}.getOffset();
             end            
         end
 
@@ -261,13 +273,12 @@ classdef asSelectionClass < handle
                 runCb = true;
             end
                 
-            noVcos = length(obj.dims);
-            if length(offs(:)) ~= noVcos
-                fprintf('Length of the offset vector has to be equal to the number of value changer (i.e.: %d)',noVcos);
+            if length(offs(:)) ~= length(obj.dims)
+                fprintf('Length of the offset vector has to be equal to the number of dimensions (i.e.: %d)',length(obj.dims));
                 return;
             end
-            for i = 1 : noVcos
-                obj.vcos{i}.setOffset(offs(i), runCb);
+            for i = 1 : length(obj.vcos)
+                obj.vcos{i}.setOffset(offs(obj.vcos{i}.getId), runCb);
             end            
         end
         
@@ -318,11 +329,21 @@ classdef asSelectionClass < handle
                 end
                 
                 lv = length(value);
-                lvco = length(obj.vcos);
-                l = min(lv,lvco);
+                if lv == length(obj.dims)
+                    for i = 1 : length(obj.hiddenDims)
+                        obj.initStrings{obj.hiddenDims(i)} = value{obj.hiddenDims(i)};
+                    end
+                    for i = 1 : length(obj.vcos)
+                        dim = obj.vcos{i}.getId;
+                        obj.vcos{i}.setStr(value{dim});
+                    end
+                else
+                    lvco = length(obj.vcos);
+                    l = min(lv,lvco);
                 
-                for i = 1 : l
-                    obj.vcos{i}.setStr(value{i});
+                    for i = 1 : l
+                        obj.vcos{i}.setStr(value{i});
+                    end
                 end
                 if obj.sendToggleState && ~suppressApplyToAll
                     obj.apply2allCb('selection.setValue',false, value, true, true);
@@ -382,7 +403,7 @@ classdef asSelectionClass < handle
         end
         
         function id = getCurrentVcId(obj)
-            id = obj.selVcoNr;
+            id = obj.vcos{obj.selVcoNr}.getId;
         end
         
         function vc = getCurrentVc(obj)
@@ -395,9 +416,10 @@ classdef asSelectionClass < handle
                     refVcoId = obj.selVcoNr;
                 end
                 
-                obj.selVcoNr = refVcoId + inc;
+                refVcoInd = obj.getVcoIndexFromDim(refVcoId);
+                obj.selVcoNr = refVcoInd + inc;
                 
-                noVcos = length(obj.dims);
+                noVcos = length(obj.vcos);
                 
                 % check if the selVco-number exists
                 if obj.selVcoNr < 1
@@ -474,17 +496,19 @@ classdef asSelectionClass < handle
             
             % number of neccessary valueChanger objects
             noVcos     = length(obj.dims);
+            obj.visibleDims = setdiff(1:noVcos, obj.hiddenDims, 'stable');
             
             % initialize array of valueChanger
-            obj.vcos    = cell(noVcos,1);
+            obj.vcos    = cell(length(obj.visibleDims),1);
             
             % create the valueChanger objects
             colonDimCount = 0;
             for i = 1 : length(obj.vcos)
+                dim = obj.visibleDims(i);
                 pos(1) = (i-1) * w;
                 
                 colonDimTag = 0;
-                if strcmp(obj.initStrings{i},':') == 1
+                if strcmp(obj.initStrings{dim},':') == 1
                     colonDimCount = colonDimCount + 1;
                     if colonDimCount < 3
                         colonDimTag = colonDimCount;
@@ -493,9 +517,9 @@ classdef asSelectionClass < handle
                 
                 obj.vcos{i} = asValueChangerClass(obj.ph, ...
                     'Position',pos,...
-                    'max', obj.dims(i),...
-                    'id',i,...
-                    'initString',obj.initStrings{i},...
+                    'max', obj.dims(dim),...
+                    'id',dim,...
+                    'initString',obj.initStrings{dim},...
                     'callback',@(vcoId)obj.callback(vcoId),...
                     'KeyPressFcn',@(src, evnt)keyPressFcn(obj,src, evnt,i),...
                     'dataObject', obj.data,...
@@ -504,7 +528,7 @@ classdef asSelectionClass < handle
                     'plotdimcallback', @obj.setPlotDim,...
                     'colonDimTag', colonDimTag,...
                     'contextmenu',obj.cmh.base);
-                if i == obj.defaultPlotDim
+                if dim == obj.defaultPlotDim
                     obj.vcos{i}.setPlotDimTag(true);
                 end
             end
@@ -528,18 +552,36 @@ classdef asSelectionClass < handle
             if obj.selVcoNr > noVcos
                 obj.selVcoNr = 1;
             end
+            if isempty(obj.vcos)
+                obj.selVcoNr = [];
+            elseif isempty(obj.selVcoNr) || obj.selVcoNr > length(obj.vcos)
+                obj.selVcoNr = 1;
+            end
         end
         
         function callback(obj, vcoId)
-            obj.selVcoNr = vcoId;
-            if obj.vcos{vcoId}.getColonDimTag && ~strcmp(obj.vcos{vcoId}.getStr,obj.vcos{vcoId}.colonStr)
-                obj.vcos{vcoId}.setColonDimTag(0,true);
+            obj.selVcoNr = obj.getVcoIndexFromDim(vcoId);
+            if obj.vcos{obj.selVcoNr}.getColonDimTag && ~strcmp(obj.vcos{obj.selVcoNr}.getStr,obj.vcos{obj.selVcoNr}.colonStr)
+                obj.vcos{obj.selVcoNr}.setColonDimTag(0,true);
             end
             if obj.sendToggleState
                 value = obj.getValue(false);
                 obj.apply2allCb('selection.setValue',false, value, true, true);
             end
             obj.updFig();
+        end
+
+        function vcoInd = getVcoIndexFromDim(obj, dim)
+            vcoInd = [];
+            for i = 1 : length(obj.vcos)
+                if obj.vcos{i}.getId == dim
+                    vcoInd = i;
+                    return;
+                end
+            end
+            if dim >= 1 && dim <= length(obj.vcos)
+                vcoInd = dim;
+            end
         end
         
         function keyPressFcn(obj,~, evnt, srcVcoNr)

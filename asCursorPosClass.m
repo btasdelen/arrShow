@@ -220,9 +220,11 @@ classdef asCursorPosClass < handle
                 return;
             end
             img = ud.cplxImg;
+            isRgbImage = isfield(ud,'isRgbImage') && ud.isRgbImage;
             
             % limit cursor position to image matrix dimensions
-            [dimY, dimX] = size(img);
+            dimY = size(img,1);
+            dimX = size(img,2);
             if pos(1) > dimY
                 pos(1) = dimY;
             end
@@ -245,7 +247,12 @@ classdef asCursorPosClass < handle
                 
                 % update stored position and the bottom panel text
                 obj.position = [posY,posX];
-                obj.setPosText([posY, posX],img(posY,posX));
+                if isRgbImage
+                    value = mean(double(squeeze(img(posY,posX,:))));
+                else
+                    value = img(posY,posX);
+                end
+                obj.setPosText([posY, posX],value);
                 
                 % create / modify cursor position rectangle
                 if isempty(ud) || ~isfield(ud,'rect') || isempty(ud.rect)

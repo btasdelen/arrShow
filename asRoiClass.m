@@ -103,6 +103,9 @@ classdef asRoiClass < handle
                     refImg = ud.cplxImg;
                 else
                     refImg = get(obj.parentImageHandle,'CData');
+                    if isfield(ud,'isRgbImage') && ud.isRgbImage
+                        refImg = mean(double(refImg),3);
+                    end
                 end
             end
             mask   = obj.objPoly.createMask;

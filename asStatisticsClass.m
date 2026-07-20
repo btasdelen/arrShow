@@ -147,11 +147,12 @@ classdef asStatisticsClass < handle
                 else
                     refImg = get(refImg,'CData');
                 end
-                if size(refImg,3) == 3 || ~isreal(refImg)
+                ud = get(axesH,'UserData');
+                isRgbImage = isfield(ud,'isRgbImage') && ud.isRgbImage;
+                if (size(refImg,3) == 3 && ~isRgbImage) || ~isreal(refImg)
                     % assume that we are dealing with an rgb array, made from a
                     % complex image.
                     % So get complex image from the axes UserData
-                    ud = get(axesH,'UserData');
                     refImg = ud.cplxImg;
                     obj.isComplex = true;
                 end

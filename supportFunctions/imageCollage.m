@@ -6,10 +6,21 @@ function [axesHandle, imageHandle] = imageCollage(...
     voxelAspectRatio,...
     keepTrueSize,...
     useQuiver,...
-    forceComplex)
+    forceComplex,...
+    viewAsRgb)
+
+if nargin < 9
+    viewAsRgb = false;
+end
 
 % get size of the image array
-[dimY, dimX, noFrames] = size(imgArr);
+if viewAsRgb
+    dimY = size(imgArr,1);
+    dimX = size(imgArr,2);
+    noFrames = size(imgArr,4);
+else
+    [dimY, dimX, noFrames] = size(imgArr);
+end
 
 % delete all uiobjects from parentPanelH
 oldHandles = get(parentPanelH,'Children');
@@ -61,7 +72,11 @@ for n=1:noFrames
         pixelPos = get(ah,'position');
         set(ah,'position',[pixelPos(1:2), dimY, dimX]);
     end
-    currImg = imgArr(:,:,n);
+    if viewAsRgb
+        currImg = imgArr(:,:,:,n);
+    else
+        currImg = imgArr(:,:,n);
+    end
     
     if useQuiver              
         imageHandle(n) = quiver(real(currImg),imag(currImg),...
@@ -74,7 +89,9 @@ for n=1:noFrames
         set(ah,'UserData',ud);
     else
     
-        if forceComplex || ~isreal(currImg)
+        if viewAsRgb
+            isComplex = false;
+        elseif forceComplex || ~isreal(currImg)
             isComplex = true;
             [currImg, CLim] = complex2rgb(currImg, 256, [], colormap(ah, colorMap));
             if any(~isfinite(CLim))

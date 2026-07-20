@@ -139,6 +139,9 @@ classdef arrShow < handle
         % The 'cmapMightBeModified' workaround causes
         % arrayShow to retrieve the potentially modified colormap from the
         % figure handle during updFig.
+
+        rgbViewEnabled = false;             % treat one size-3 dimension as RGB color channels
+        rgbImageDim = [];                   % original array dimension used as RGB color channel
     end
     
     properties (Constant, GetAccess = private)
@@ -1329,6 +1332,33 @@ classdef arrShow < handle
             end
             
         end
+
+        function arr = getSelectedRgbImages(obj)
+            arr = obj.getSelectedImages(true);
+            colDims = obj.selection.getColonDims();
+            if length(colDims) < 2
+                colDims = setdiff(1:ndims(arr), obj.rgbImageDim, 'stable');
+                colDims = colDims(1:min(2,length(colDims)));
+            end
+
+            si = size(obj.data.dat);
+            noDims = length(si);
+            remainingDims = setdiff(1:noDims, [colDims(:).', obj.rgbImageDim], 'stable');
+            order = [colDims(:).', obj.rgbImageDim, remainingDims];
+            arr = permute(arr, order);
+
+            arrSize = size(arr);
+            if length(arrSize) < 3
+                arrSize(3) = 1;
+            end
+            frameDims = arrSize(4:end);
+            if isempty(frameDims)
+                noFrames = 1;
+            else
+                noFrames = prod(frameDims);
+            end
+            arr = reshape(arr, arrSize(1), arrSize(2), 3, noFrames);
+        end
         
         
         function dims = getImageDimensions(obj)
@@ -2497,6 +2527,78 @@ classdef arrShow < handle
             end
             obj.updFig();
         end        
+
+        function toggleRgbImageView(obj, bool)
+            if nargin < 2
+                bool = ~obj.rgbViewEnabled;
+            end
+
+            if bool && ~obj.rgbViewAvailable()
+                fprintf('No supported RGB dimension found. RGB view requires real data with a dimension of length 3.\n');
+                obj.rgbViewEnabled = false;
+                obj.rgbImageDim = [];
+            else
+                obj.rgbViewEnabled = bool;
+                if bool
+                    rgbDims = obj.getRgbCandidateDims();
+                    obj.rgbImageDim = rgbDims(1);
+                else
+                    obj.rgbImageDim = [];
+                end
+            end
+
+            obj.applyRgbSelectionMode();
+            obj.updateRgbImageMenu();
+            obj.updFig();
+        end
+
+        function updateRgbImageMenu(obj)
+            if isfield(obj.mbh,'rgbImage') && ishandle(obj.mbh.rgbImage)
+                set(obj.mbh.rgbImage,'Enable',arrShow.boolToOnOff(obj.rgbViewAvailable()));
+                set(obj.mbh.rgbImage,'Checked',arrShow.boolToOnOff(obj.rgbViewEnabled));
+            end
+        end
+
+        function bool = rgbViewAvailable(obj)
+            bool = obj.rgbDataTypeSupported() && ~isempty(obj.getRgbCandidateDims());
+        end
+
+        function bool = rgbDataTypeSupported(obj)
+            bool = isreal(obj.data.dat) && (isnumeric(obj.data.dat) || islogical(obj.data.dat));
+        end
+
+        function rgbDims = getRgbCandidateDims(obj)
+            if obj.rgbDataTypeSupported()
+                si = size(obj.data.dat);
+                noDims = length(si);
+                rgbDims = find(si == 3);
+                rgbDims = rgbDims(arrayfun(@(dim)length(setdiff(1:noDims, dim)) >= 2, rgbDims));
+            else
+                rgbDims = [];
+            end
+        end
+
+        function applyRgbSelectionMode(obj)
+            if isempty(obj.selection)
+                return;
+            end
+
+            sel = obj.selection.getValueAsCell(true);
+            hiddenDims = [];
+            if obj.rgbViewEnabled
+                hiddenDims = obj.rgbImageDim;
+                sel{obj.rgbImageDim} = ':';
+                visibleDims = setdiff(1:length(size(obj.data.dat)), obj.rgbImageDim, 'stable');
+                colDims = obj.selection.getColonDims();
+                colDims = setdiff(colDims, obj.rgbImageDim, 'stable');
+                if length(colDims) < 2 && length(visibleDims) >= 2
+                    sel{visibleDims(1)} = ':';
+                    sel{visibleDims(2)} = ':';
+                end
+            end
+            obj.selection.reInit(size(obj.data.dat), sel, hiddenDims);
+        end
+
         function toggeShowVectorPlot(obj)
             %... just an alias to useQuiver
             obj.toggleUseQuiver();
@@ -2864,6 +2966,10 @@ classdef arrShow < handle
             obj.mbh.quiver = uimenu(mb_view,'Label','Show vector plot' ,...
                 'callback',@(src,evnt)obj.toggleUseQuiver(),...
                 'Checked','off');            
+            obj.mbh.rgbImage = uimenu(mb_view,'Label','View as RGB image' ,...
+                'callback',@(src,evnt)obj.toggleRgbImageView(),...
+                'Checked','off');
+            obj.updateRgbImageMenu();
             
             % zoom
             cmh_zoom = uimenu(mb_view,'Label','Set zoom' ,...
@@ -3690,6 +3796,13 @@ classdef arrShow < handle
             
             % reactivate handle visibility
             set(obj.fh,'HandleVisibility','on');
+
+            if obj.rgbViewEnabled && ~obj.rgbViewAvailable()
+                obj.rgbViewEnabled = false;
+                obj.rgbImageDim = [];
+                obj.applyRgbSelectionMode();
+            end
+            obj.updateRgbImageMenu();
             
             % if the images are not complex,...
             if isreal(obj.data.dat)
@@ -3724,12 +3837,17 @@ classdef arrShow < handle
                 end
             end
             
-            % get selected images
-            selCplxImgs = squeeze(obj.getSelectedImages(true));
-            
-            % isolate selected complex part
-            fun = obj.complexSelect.getFunPointer();
-            selImgs = fun(selCplxImgs);
+            if obj.rgbViewEnabled
+                selCplxImgs = obj.getSelectedRgbImages();
+                selImgs = selCplxImgs;
+            else
+                % get selected images
+                selCplxImgs = squeeze(obj.getSelectedImages(true));
+
+                % isolate selected complex part
+                fun = obj.complexSelect.getFunPointer();
+                selImgs = fun(selCplxImgs);
+            end
             
             % force complex representation?
             if obj.forceComplexRepresentation && ...
@@ -3770,7 +3888,7 @@ classdef arrShow < handle
             obj.stdCmapMightBeModified = false;
             
             % use quiver?
-            useQuiver = arrShow.onOffToBool(get(obj.mbh.quiver,'Checked'));
+            useQuiver = arrShow.onOffToBool(get(obj.mbh.quiver,'Checked')) && ~obj.rgbViewEnabled;
             
             % display the images and save image handle
             try
@@ -3782,7 +3900,8 @@ classdef arrShow < handle
                     obj.data.getSelectionAspectRatio(),...
                     trueSize,...
                     useQuiver,...
-                    forceComplex);
+                    forceComplex,...
+                    obj.rgbViewEnabled);
             catch ME
                 obj.errorHandlerInvalidData(ME);
                 return;
@@ -3792,7 +3911,15 @@ classdef arrShow < handle
             % assign the original complex image data to the axes handles
             for i = 1 : noImgs
                 ud = get(allAxes(i),'UserData');
-                ud.cplxImg = selCplxImgs(:,:,i);
+                if obj.rgbViewEnabled
+                    ud.cplxImg = selCplxImgs(:,:,:,i);
+                    ud.isRgbImage = true;
+                    ud.isComplex = false;
+                else
+                    ud.cplxImg = selCplxImgs(:,:,i);
+                    ud.isRgbImage = false;
+                    ud.isComplex = forceComplex || ~isreal(selCplxImgs(:,:,i));
+                end
                 set(allAxes(i),'UserData',ud);
             end
             
@@ -3802,7 +3929,9 @@ classdef arrShow < handle
             end
             
             % update image stats- and image windowing object
-            if strcmp(obj.complexSelect.getSelection,'Pha')
+            if obj.rgbViewEnabled
+                obj.window.toggleUsePhaseCW(false);
+            elseif strcmp(obj.complexSelect.getSelection,'Pha')
                 obj.window.toggleUsePhaseCW(true);
             else
                 obj.window.toggleUsePhaseCW(false);
