@@ -159,6 +159,9 @@ classdef asStatisticsClass < handle
                 obj.ah = axesH;                                
             end
 
+            if exist('isRgbImage','var') && isRgbImage
+                refImg = mean(double(refImg),3);
+            end
             obj.imgDim = size(refImg);
             refVect = refImg(:);
             obj.imgNorm= norm(refVect,2);

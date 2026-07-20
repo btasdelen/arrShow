@@ -958,8 +958,8 @@ classdef asWindowingClass < handle
                 
                 switch obj.rangeCalcMethod
                     case 1 % min / max
-                        mi = min(min(refImage));
-                        ma = max(max(refImage));
+                        mi = min(refImage(:));
+                        ma = max(refImage(:));
                     case 2 % percentile
                         mi = -asWindowingClass.vecPerc(-refImage(:),obj.percentile);
                         ma = asWindowingClass.vecPerc(refImage(:),obj.percentile);
